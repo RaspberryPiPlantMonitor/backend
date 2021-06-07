@@ -1,4 +1,4 @@
-module github.com/danielmapar/plantbot
+module github.com/RaspberryPiPlantMonitor/backend
 
 go 1.16
 
@@ -6,7 +6,6 @@ require (
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gorilla/websocket v1.4.1
-	github.com/hybridgroup/mjpeg v0.0.0-20140228234708-4680f319790e
 	github.com/imkira/go-interpol v1.1.0 // indirect
 	github.com/kataras/iris/v12 v12.1.8
 	github.com/kataras/neffos v0.0.14
@@ -20,5 +19,6 @@ require (
 	github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0 // indirect
 	github.com/yudai/gojsondiff v1.0.0 // indirect
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect
+	go.bug.st/serial v1.1.3
 	gocv.io/x/gocv v0.27.0
 )
