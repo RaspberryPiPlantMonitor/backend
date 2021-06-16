@@ -23,9 +23,7 @@
             opencv lib version: 4.5.2
             ```
 
-### Humidity Sensor and Water Pump
+* Run `APP_PASSWORD=mypassword go run main.go`
 
-* Add the ADS1115 module library: `sudo pip install adafruit-ads1x15`
 
-* Detailed instructions can be found [here](./Plant_Watering_System_with_Raspberry_Pi.pdf)
 

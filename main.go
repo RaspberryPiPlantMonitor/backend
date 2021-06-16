@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	gorillaWs "github.com/gorilla/websocket"
@@ -19,6 +21,15 @@ import (
 // nohup go run main.go > ngrok.log &
 // nohup ./ngrok tcp 8080 > ngrok.log &
 // curl http://localhost:4040/api/tunnels
+
+func validPassword(c *websocket.Conn) error {
+	ctx := websocket.GetContext(c)
+	password := os.Getenv("APP_PASSWORD")
+	if ctx.URLParamDefault("password", "Not a password") != password {
+		return errors.New("Invalid token!")
+	}
+	return nil
+}
 
 func main() {
 
@@ -35,6 +46,10 @@ func main() {
 	})
 
 	websocketServer.OnConnect = func(c *websocket.Conn) error {
+		if err := validPassword(c); err != nil {
+			c.Close()
+			return err
+		}
 		log.Printf("[%s] Connected to server!", c.ID())
 		return nil
 	}
