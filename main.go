@@ -7,9 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	gorillaWs "github.com/gorilla/websocket"
+	"github.com/iris-contrib/middleware/cors"
+	"github.com/joho/godotenv"
 	"github.com/kataras/iris/v12"
 	"github.com/kataras/iris/v12/websocket"
 	"github.com/kataras/neffos/gorilla"
@@ -22,8 +25,7 @@ import (
 // nohup ./ngrok tcp 8080 > ngrok.log &
 // curl http://localhost:4040/api/tunnels
 
-func validPassword(c *websocket.Conn) error {
-	ctx := websocket.GetContext(c)
+func validPassword(ctx iris.Context) error {
 	password := os.Getenv("APP_PASSWORD")
 	if ctx.URLParamDefault("password", "Not a password") != password {
 		return errors.New("Invalid token!")
@@ -31,8 +33,41 @@ func validPassword(c *websocket.Conn) error {
 	return nil
 }
 
+func authMiddleware(ctx iris.Context) {
+	if err := validPassword(ctx); err != nil {
+		ctx.StopWithError(iris.StatusBadRequest, err)
+	}
+	ctx.Next()
+	return
+}
+
 func main() {
 
+	// Loading .env vars file
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	humiditySensorLimitEnv := "APP_HUMIDITY_SENSOR_LIMIT"
+	lightStatusEnv := "APP_LIGHT_STATUS"
+	pumpStatusEnv := "APP_PUMP_STATUS"
+
+	var lightRelayStatus byte
+	if os.Getenv(lightStatusEnv) == "on" {
+		lightRelayStatus = '1'
+	} else {
+		lightRelayStatus = '0'
+	}
+
+	var pumpRelayStatus byte
+	if os.Getenv(pumpStatusEnv) == "on" {
+		pumpRelayStatus = '1'
+	} else {
+		pumpRelayStatus = '0'
+	}
+
+	// For dev use only
 	upgrader := gorilla.Upgrader(gorillaWs.Upgrader{
 		CheckOrigin: func(*http.Request) bool {
 			return true
@@ -46,7 +81,8 @@ func main() {
 	})
 
 	websocketServer.OnConnect = func(c *websocket.Conn) error {
-		if err := validPassword(c); err != nil {
+		ctx := websocket.GetContext(c)
+		if err := validPassword(ctx); err != nil {
 			c.Close()
 			return err
 		}
@@ -62,8 +98,11 @@ func main() {
 		log.Printf("Upgrade Error: %v", err)
 	}
 
-	// Humidity sensor stream
-	go func() {
+	sensorChannel := make(chan []byte)
+	defer close(sensorChannel)
+
+	// Sensors stream
+	go func(channel chan []byte) {
 		mode := &serial.Mode{
 			BaudRate: 9600, // Same as Arduino code,
 		}
@@ -72,60 +111,52 @@ func main() {
 			log.Fatal(err)
 		}
 
-		buffer := make([]byte, 4)
-		sensorData := make([]byte, 6)
-		counter := 0
-		readStream := false
+		// First position representes the Light Relay
+		// Second position represents the Pump Relay
+		outputBuffer := <-channel
+
+		inputBuffer := make([]byte, 4)
+		var inputJSON []byte
 
 		for {
-			buffer = make([]byte, 4)
-			n, err := port.Read(buffer)
+			_, outputBufferErr := port.Write(outputBuffer)
+			if outputBufferErr != nil {
+				log.Fatal(outputBufferErr.Error())
+				break
+			}
 
+			n, err := port.Read(inputBuffer)
 			if err != nil {
 				log.Fatal(err)
-				port.Close()
 				break
 			}
 			if n == 0 {
-				fmt.Println("No sensor data found!")
-				port.Close()
+				fmt.Println("\nEOF")
 				break
 			}
 
-			for _, b := range buffer {
-				// Counter = 6 means we have the sensor value XXX.XX (6 characters)
-				// Example: 394.00
-				if counter == 6 {
+			for _, b := range inputBuffer[:n] {
+				if b == '{' {
+					inputJSON = nil
+				} else if b == '}' {
+					inputJSON = append(inputJSON, b)
 					message := websocket.Message{
-						Body:     sensorData,
+						Body:     inputJSON,
 						IsNative: true,
 					}
 					websocketServer.Broadcast(nil, message)
+					inputJSON = nil
 				}
-				// If ":" aka byte 58 was found, start reading stream
-				// Stream = ML:111.11\n\r
-				if b == byte(58) && !readStream {
-					readStream = true
-					continue
-				}
-				if readStream == false {
-					continue
-				}
-				// Ignore bytes that are not numbers (0 to 9) or a dot "."
-				// Check ASCII table
-				if !(b >= byte(48) && b <= byte(57)) && b != byte(46) {
-					sensorData = make([]byte, 6)
-					counter = 0
-					readStream = false
-					continue
-				}
-				if readStream {
-					sensorData[counter] = b
-					counter++
-				}
+				inputJSON = append(inputJSON, b)
 			}
 		}
-	}()
+	}(sensorChannel)
+
+	var outputBuffer []byte
+	outputBuffer = append(outputBuffer, lightRelayStatus)
+	outputBuffer = append(outputBuffer, pumpRelayStatus)
+
+	sensorChannel <- outputBuffer
 
 	// Video stream
 	go func() {
@@ -157,7 +188,68 @@ func main() {
 	}()
 
 	app := iris.New()
-	app.Get("/", websocket.Handler(websocketServer))
+	app.Get("/realtime", websocket.Handler(websocketServer))
+
+	// For dev use only
+	crs := cors.New(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowCredentials: true,
+	})
+	app.Use(crs)
+	app.AllowMethods(iris.MethodOptions)
+
+	type HumidityBody struct {
+		Value int
+	}
+
+	app.Post("/humiditySensorLimit", authMiddleware, func(ctx iris.Context) {
+		humidityBody := HumidityBody{Value: 400}
+		err := ctx.ReadJSON(&humidityBody)
+		if err != nil {
+			ctx.StopWithError(iris.StatusBadRequest, err)
+			return
+		}
+		os.Setenv(humiditySensorLimitEnv, strconv.Itoa(humidityBody.Value))
+		ctx.JSON(iris.Map{
+			"value": os.Getenv(humiditySensorLimitEnv),
+		})
+	})
+
+	app.Get("/humiditySensorLimit", authMiddleware, func(ctx iris.Context) {
+		if value, ok := os.LookupEnv(humiditySensorLimitEnv); ok {
+			ctx.JSON(iris.Map{
+				"value": value,
+			})
+			return
+		}
+		ctx.JSON(iris.Map{
+			"value": "400",
+		})
+	})
+
+	type LightRelayBody struct {
+		Value string
+	}
+
+	app.Post("/lightRelay", authMiddleware, func(ctx iris.Context) {
+		lightRelayBody := LightRelayBody{Value: ""}
+		err := ctx.ReadJSON(&lightRelayBody)
+		if err != nil {
+			ctx.StopWithError(iris.StatusBadRequest, err)
+			return
+		}
+		if lightRelayBody.Value == "on" {
+			lightRelayStatus = '1'
+		} else {
+			lightRelayStatus = '0'
+		}
+		outputBuffer[0] = lightRelayStatus
+		sensorChannel <- outputBuffer
+
+		ctx.JSON(iris.Map{
+			"value": lightRelayStatus,
+		})
+	})
 
 	app.Run(iris.Addr(":8080"))
 }
