@@ -22,8 +22,9 @@ import (
 
 // ngrok http -auth="username:password" 8080
 // nohup go run main.go > ngrok.log &
-// nohup ./ngrok tcp 8080 > ngrok.log &
+// nohup ./ngrok -log=stdout http 8080 > ngrok.log &
 // curl http://localhost:4040/api/tunnels
+// jobs
 
 func validPassword(ctx iris.Context) error {
 	password := os.Getenv("APP_PASSWORD")
@@ -189,6 +190,8 @@ func main() {
 
 	app := iris.New()
 	app.Get("/realtime", websocket.Handler(websocketServer))
+
+	app.HandleDir("/", iris.Dir("./build"))
 
 	// For dev use only
 	crs := cors.New(cors.Options{
