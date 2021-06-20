@@ -23,7 +23,13 @@
             opencv lib version: 4.5.2
             ```
 
-* Run `APP_PASSWORD=mypassword go run main.go`
+* Change your `.env` file with the setting you desire
+
+* Build the `frontend` code and move the `build` folder to the root of this folder
+
+* Run `go run main.go`
+
+
 
 
 
