@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -52,6 +53,20 @@ func authMiddleware(ctx iris.Context) {
 	return
 }
 
+// Limit pump runtime in "pumpRuntimeLimit" seconds for safety
+func setTimer(duration int64, channel chan bool) {
+	startTime := time.Now().Unix()
+	for {
+		currentTime := time.Now().Unix()
+		channel <- true
+		// Stop timer
+		if (currentTime - startTime) > duration {
+			channel <- false
+			break
+		}
+	}
+}
+
 func main() {
 
 	// Loading .env vars file
@@ -60,37 +75,41 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	humiditySensorLimitEnvVar := "APP_HUMIDITY_SENSOR_LIMIT"
+	humiditySensorMinEnvVar := "APP_HUMIDITY_SENSOR_MIN"
+	pumpRuntimeLimitSecondsEnvVar := "APP_PUMP_RUNTIME_LIMIT_SECONDS"
 	lightStatusEnvVar := "APP_LIGHT_STATUS"
 	pumpStatusEnvVar := "APP_PUMP_STATUS"
 	enableCORSEnvVar := "APP_ENABLE_CORS"
 	portEnvVar := "APP_PORT"
 
-	var lightRelayStatus byte
+	var pumpRuntimeLimitSeconds int = 5
+	if len(os.Getenv(pumpRuntimeLimitSecondsEnvVar)) > 0 {
+		if value, err := strconv.Atoi(os.Getenv(pumpRuntimeLimitSecondsEnvVar)); err == nil {
+			pumpRuntimeLimitSeconds = value
+		}
+	}
+
+	var lightRelayStatus byte = '0'
 	if os.Getenv(lightStatusEnvVar) == "on" {
 		lightRelayStatus = '1'
-	} else {
-		lightRelayStatus = '0'
 	}
 
-	var pumpRelayStatus byte
+	var pumpRelayStatus byte = '0'
 	if os.Getenv(pumpStatusEnvVar) == "on" {
 		pumpRelayStatus = '1'
-	} else {
-		pumpRelayStatus = '0'
 	}
 
-	var upgrader neffos.Upgrader = nil
+	var websocketUpgrader neffos.Upgrader = nil
 
 	if os.Getenv(enableCORSEnvVar) == "true" {
 		// For dev use only
-		upgrader = gorilla.Upgrader(gorillaWs.Upgrader{
+		websocketUpgrader = gorilla.Upgrader(gorillaWs.Upgrader{
 			CheckOrigin: func(*http.Request) bool {
 				return true
 			}})
 	}
 
-	websocketServer := websocket.New(upgrader, websocket.Events{
+	websocketServer := websocket.New(websocketUpgrader, websocket.Events{
 		websocket.OnNativeMessage: func(nsConn *websocket.NSConn, msg websocket.Message) error {
 			log.Printf("Server got: %s from [%s]", msg.Body, nsConn.Conn.ID())
 			return nil
@@ -125,8 +144,8 @@ func main() {
 	sensorOptionsBuffer = append(sensorOptionsBuffer, lightRelayStatus)
 	sensorOptionsBuffer = append(sensorOptionsBuffer, pumpRelayStatus)
 
-	// Sensors stream
-	go func(channel chan []byte) {
+	// Collect arduino sensor data and stream it via Websockets to the client
+	go func(sensorChannel chan []byte) {
 		mode := &serial.Mode{
 			BaudRate: 9600, // Same as Arduino code,
 		}
@@ -137,31 +156,38 @@ func main() {
 			log.Fatal(err)
 		}
 
+		timerChannel := make(chan bool)
+		defer close(timerChannel)
+		timerChannelActive := false
+
 		// First position representes the Light Relay
 		// Second position represents the Pump Relay
-		outputBuffer := <-channel
+		sensorInputBuffer := <-sensorChannel
+		sensorOutputBuffer := make([]byte, 4)
 
-		inputBuffer := make([]byte, 4)
-		var inputJSON []byte
-
+		var sensorOutput []byte
 		for {
-
 			select {
-			case outputBuffer = <-channel:
-				fmt.Printf("Changed switch: %v\n", outputBuffer)
+			case sensorInputBuffer = <-sensorChannel:
+				fmt.Printf("Changed switch: %v\n", sensorInputBuffer)
+			case timerChannelActive = <-timerChannel:
+				if timerChannelActive {
+					sensorInputBuffer[1] = '1'
+				} else {
+					sensorInputBuffer[1] = '0'
+				}
 			default:
-				//fmt.Println("no message received")
 			}
 
-			_, outputBufferErr := port.Write(outputBuffer)
-			if outputBufferErr != nil {
-				log.Fatal(outputBufferErr.Error())
+			_, sensorInputBufferErr := port.Write(sensorInputBuffer)
+			if sensorInputBufferErr != nil {
+				log.Fatal(sensorInputBufferErr.Error())
 				break
 			}
 
-			n, err := port.Read(inputBuffer)
-			if err != nil {
-				log.Fatal(err)
+			n, sensorOutputBufferErr := port.Read(sensorOutputBuffer)
+			if sensorOutputBufferErr != nil {
+				log.Fatal(sensorOutputBufferErr)
 				break
 			}
 			if n == 0 {
@@ -169,26 +195,47 @@ func main() {
 				break
 			}
 
-			for _, b := range inputBuffer[:n] {
+			for _, b := range sensorOutputBuffer[:n] {
 				if b == '{' {
-					inputJSON = nil
+					sensorOutput = nil
 				} else if b == '}' {
-					inputJSON = append(inputJSON, b)
-					message := websocket.Message{
-						Body:     inputJSON,
-						IsNative: true,
+					sensorOutput = append(sensorOutput, b)
+
+					var sensorOutputJSON map[string]interface{}
+					if err := json.Unmarshal(sensorOutput, &sensorOutputJSON); err == nil {
+
+						humidityValue := sensorOutputJSON["humidityValue"].(float64)
+
+						humiditySensorMin, humiditySensorMinErr := strconv.ParseFloat(os.Getenv(humiditySensorMinEnvVar), 64)
+						if humiditySensorMinErr != nil {
+							humiditySensorMin = 300
+						}
+
+						// Water manually
+						if !timerChannelActive && sensorInputBuffer[1] == '1' {
+							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
+							// Water automatically based on parameter baseline
+						} else if !timerChannelActive && humidityValue < humiditySensorMin {
+							sensorInputBuffer[1] = '1'
+							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
+						}
+
+						message := websocket.Message{
+							Body:     sensorOutput,
+							IsNative: true,
+						}
+						websocketServer.Broadcast(nil, message)
 					}
-					websocketServer.Broadcast(nil, message)
-					inputJSON = nil
+					sensorOutput = nil
 				}
-				inputJSON = append(inputJSON, b)
+				sensorOutput = append(sensorOutput, b)
 			}
 		}
 	}(sensorChannel)
 
 	sensorChannel <- sensorOptionsBuffer
 
-	// Video stream
+	// Connect to USB/Pi Camera and send base64 images via Websockets to the client
 	go func() {
 		camera, err := gocv.VideoCaptureDevice(0)
 		if err != nil {
@@ -227,7 +274,7 @@ func main() {
 	if os.Getenv(enableCORSEnvVar) == "true" {
 		// Our custom CORS middleware.
 		crs := func(ctx iris.Context) {
-			ctx.Header("Access-Control-Allow-Origin", "http://localhost:3001")
+			ctx.Header("Access-Control-Allow-Origin", "http://localhost:3000")
 			ctx.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Sec-WebSocket-Protocol")
 			ctx.Header("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
 			ctx.Header("Access-Control-Allow-Credentials", "true")
@@ -251,7 +298,7 @@ func main() {
 		app.UseRouter(crs)
 	}
 
-	app.Post("/humiditySensorLimit", authMiddleware, func(ctx iris.Context) {
+	app.Post("/humiditySensorMin", authMiddleware, func(ctx iris.Context) {
 		type HumidityBody struct {
 			Value int
 		}
@@ -263,22 +310,19 @@ func main() {
 			ctx.StopWithError(iris.StatusBadRequest, err)
 			return
 		}
-		os.Setenv(humiditySensorLimitEnvVar, strconv.Itoa(humidityBody.Value))
+		os.Setenv(humiditySensorMinEnvVar, strconv.Itoa(humidityBody.Value))
 		ctx.JSON(iris.Map{
-			"value": os.Getenv(humiditySensorLimitEnvVar),
+			"value": os.Getenv(humiditySensorMinEnvVar),
 		})
 	})
 
-	app.Get("/humiditySensorLimit", authMiddleware, func(ctx iris.Context) {
-		if value, ok := os.LookupEnv(humiditySensorLimitEnvVar); ok {
+	app.Get("/humiditySensorMin", authMiddleware, func(ctx iris.Context) {
+		if value, ok := os.LookupEnv(humiditySensorMinEnvVar); ok {
 			ctx.JSON(iris.Map{
 				"value": value,
 			})
 			return
 		}
-		ctx.JSON(iris.Map{
-			"value": "400",
-		})
 	})
 
 	app.Post("/lightRelay", authMiddleware, func(ctx iris.Context) {
@@ -293,10 +337,9 @@ func main() {
 			ctx.StopWithError(iris.StatusBadRequest, err)
 			return
 		}
+		var lightRelayStatus byte = '0'
 		if lightRelayBody.Value == "on" {
 			lightRelayStatus = '1'
-		} else {
-			lightRelayStatus = '0'
 		}
 		sensorOptionsBuffer[0] = lightRelayStatus
 		sensorChannel <- sensorOptionsBuffer
@@ -321,10 +364,9 @@ func main() {
 			ctx.StopWithError(iris.StatusBadRequest, err)
 			return
 		}
+		var pumpRelayStatus byte = '0'
 		if pumpRelayBody.Value == "on" {
 			pumpRelayStatus = '1'
-		} else {
-			pumpRelayStatus = '0'
 		}
 		sensorOptionsBuffer[1] = pumpRelayStatus
 		sensorChannel <- sensorOptionsBuffer
