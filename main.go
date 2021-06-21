@@ -99,7 +99,7 @@ func main() {
 		pumpRelayStatus = '1'
 	}
 
-	var websocketUpgrader neffos.Upgrader = nil
+	var websocketUpgrader neffos.Upgrader = websocket.DefaultGorillaUpgrader
 
 	if os.Getenv(enableCORSEnvVar) == "true" {
 		// For dev use only
