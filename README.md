@@ -4,8 +4,6 @@
 
 ## Setup
 
-### Websocket/HTTP API and RaspberryPi Camera
-
 * Install the [Go compiler](https://pimylifeup.com/raspberry-pi-golang/)
 
 * Install go module package dependencies: `go mod tidy`
@@ -27,7 +25,20 @@
 
 * Build the `frontend` code and move the `build` folder to the root of this folder
 
+### Run it inside the network
+
 * Run `go run main.go`
+
+### Run it on the internet
+
+* Run `nohup go run main.go > ngrok.log &`
+
+* Download [ngrok](https://ngrok.com/) and run `./ngrok http 8080 > ngrok.log &`
+
+* Check your ngrok endpoint by doing `curl http://localhost:4040/api/tunnels`
+
+* Check your `nohups` jobs by running `jobs`
+
 
 
 
