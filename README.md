@@ -3,7 +3,7 @@
 ## Demo video
 
 * Want to see the system in action? Watch this video: 
-   * [![Plant Monitor System Video](https://img.youtube.com/vi/XOIkH0mkq2M/0.jpg)](https://www.youtube.com/watch?v=XOIkH0mkq2M)
+[![Plant Monitor System Video](https://img.youtube.com/vi/XOIkH0mkq2M/0.jpg)](https://www.youtube.com/watch?v=XOIkH0mkq2M)
 
 ## Circuit Diagram
 
