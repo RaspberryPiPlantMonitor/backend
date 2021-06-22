@@ -215,7 +215,7 @@ func main() {
 						if !timerChannelActive && sensorInputBuffer[1] == '1' {
 							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
 							// Water automatically based on parameter baseline
-						} else if !timerChannelActive && humidityValue < humiditySensorMin {
+						} else if !timerChannelActive && humidityValue > humiditySensorMin {
 							sensorInputBuffer[1] = '1'
 							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
 						}
