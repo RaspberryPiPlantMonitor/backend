@@ -8,7 +8,7 @@
 
 ## Circuit Diagram
 
-![circuit_setup](circuit_diagram.png) 
+![circuit_setup](circuit_diagram_v1.png) 
 
 **List of components:**
 * [Raspberry Pi 3 or greater](https://www.amazon.ca/CanaKit-Raspberry-Starter-Premium-Black/dp/B07BCC8PK7/ref=sr_1_5?dchild=1&keywords=raspberry+pi&qid=1624346134&sr=8-5)
