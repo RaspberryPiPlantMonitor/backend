@@ -75,6 +75,7 @@
     * `cd ~/Desktop/workspace/frontend`
 
 * Build the `frontend` code and move the `build` directory to the `backend` folder
+    * `npm install` 
     * `npm run build`
     * `mv ~/Desktop/workspace/frontend/build ~/Desktop/workspace/backend/build`
 
