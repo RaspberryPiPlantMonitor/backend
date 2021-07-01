@@ -31,7 +31,7 @@
 
 ### Run it on the internet
 
-* Run `nohup go run main.go > ngrok.log &`
+* Run `nohup go run main.go fifo.go > ngrok.log &`
 
 * Download [ngrok](https://ngrok.com/) and run `nohup ./ngrok http 8080 > ngrok.log &`
 

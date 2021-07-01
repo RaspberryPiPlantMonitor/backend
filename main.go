@@ -165,6 +165,10 @@ func main() {
 		sensorInputBuffer := <-sensorChannel
 		sensorOutputBuffer := make([]byte, 4)
 
+		// Create a cache to hold the last 10 humidty sensor values
+		cacheSize := 10
+		cache := NewFIFO(cacheSize)
+
 		var sensorOutput []byte
 		for {
 			select {
@@ -206,6 +210,13 @@ func main() {
 
 						humidityValue := sensorOutputJSON["humidityValue"].(float64)
 
+						// Push new sensor value to cache
+						cache.Set(time.Now().Unix(), humidityValue)
+						// cache.dump()
+
+						// Take average of the 10 last seen humidity sensor values
+						humidityValuesSum := cache.Avg()
+
 						humiditySensorMin, humiditySensorMinErr := strconv.ParseFloat(os.Getenv(humiditySensorMinEnvVar), 64)
 						if humiditySensorMinErr != nil {
 							humiditySensorMin = 300
@@ -215,7 +226,7 @@ func main() {
 						if !timerChannelActive && sensorInputBuffer[1] == '1' {
 							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
 							// Water automatically based on parameter baseline
-						} else if !timerChannelActive && humidityValue > humiditySensorMin {
+						} else if !timerChannelActive && humidityValuesSum > humiditySensorMin {
 							sensorInputBuffer[1] = '1'
 							go setTimer(int64(pumpRuntimeLimitSeconds), timerChannel)
 						}
